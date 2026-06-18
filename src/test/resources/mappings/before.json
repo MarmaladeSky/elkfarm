@@ -1,0 +1,8 @@
+{
+  "mappings": {
+    "properties": {
+      "name":  { "type": "text" },
+      "price": { "type": "integer" }
+    }
+  }
+}

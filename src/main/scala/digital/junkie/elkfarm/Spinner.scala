@@ -1,0 +1,41 @@
+package digital.junkie.elkfarm
+
+import cats.effect.IO
+
+import scala.concurrent.duration.*
+
+object Spinner {
+
+  private val esc = ""
+
+  /** Pulse-bar frames: a five-cell block that fills then empties. */
+  private val frames = Vector(
+    "[▱▱▱▱▱]",
+    "[▰▱▱▱▱]",
+    "[▰▰▱▱▱]",
+    "[▰▰▰▱▱]",
+    "[▰▰▰▰▱]",
+    "[▰▰▰▰▰]"
+  )
+
+  private val interval = 120.millis
+
+  /** Runs `task`, showing an animated pulse bar with `label` on the current
+    * line while it is in flight. The bar runs on a background fiber and is
+    * cancelled once `task` finishes (or fails); the line is cleared and the
+    * cursor restored on the way out.
+    */
+  def apply[A](label: String)(task: IO[A]): IO[A] = {
+    def draw(i: Int): IO[Unit] =
+      IO(print(s"\r$esc[2K${frames(i % frames.length)} $label")) >>
+        IO(Console.flush())
+
+    def loop(i: Int): IO[Unit] =
+      draw(i) >> IO.sleep(interval) >> loop(i + 1)
+
+    val hideCursor   = IO(print(s"$esc[?25l")) >> IO(Console.flush())
+    val clearAndShow = IO(print(s"\r$esc[2K$esc[?25h")) >> IO(Console.flush())
+
+    (hideCursor >> loop(0).background.surround(task)).guarantee(clearAndShow)
+  }
+}

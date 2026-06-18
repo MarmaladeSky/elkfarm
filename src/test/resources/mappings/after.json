@@ -1,0 +1,9 @@
+{
+  "mappings": {
+    "properties": {
+      "name":     { "type": "text" },
+      "price":    { "type": "float" },
+      "category": { "type": "keyword" }
+    }
+  }
+}
