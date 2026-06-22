@@ -25,10 +25,19 @@ object Spinner {
     * cancelled once `task` finishes (or fails); the line is cleared and the
     * cursor restored on the way out.
     */
-  def apply[A](label: String)(task: IO[A]): IO[A] = {
+  def apply[A](label: String)(task: IO[A]): IO[A] =
+    withProgress(IO.pure(label))(task)
+
+  /** Like [[apply]], but `label` is re-read on every frame, so a caller can
+    * surface live progress (e.g. a reindex doc count) next to the pulse bar
+    * while the bar keeps animating in between updates.
+    */
+  def withProgress[A](label: IO[String])(task: IO[A]): IO[A] = {
     def draw(i: Int): IO[Unit] =
-      IO(print(s"\r$esc[2K${frames(i % frames.length)} $label")) >>
-        IO(Console.flush())
+      label.flatMap { l =>
+        IO(print(s"\r$esc[2K${frames(i % frames.length)} $l")) >>
+          IO(Console.flush())
+      }
 
     def loop(i: Int): IO[Unit] =
       draw(i) >> IO.sleep(interval) >> loop(i + 1)

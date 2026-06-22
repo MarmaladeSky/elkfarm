@@ -1,7 +1,9 @@
 package digital.junkie.elkfarm
 
+import cats.data.{Validated, ValidatedNel}
 import cats.effect.{ExitCode, IO}
 import cats.syntax.apply.*
+import cats.syntax.foldable.*
 import com.monovore.decline.Opts
 import com.monovore.decline.effect.CommandIOApp
 import digital.junkie.elkfarm.Elastic.State
@@ -36,14 +38,40 @@ object Main
     .flag("yes", "Skip the confirmation and apply the changes", short = "y")
     .orFalse
 
+  private sealed trait Prune
+  private case object PruneAll              extends Prune
+  private final case class PruneKeep(n: Int) extends Prune
+
+  private def parsePrune(raw: String): ValidatedNel[String, Prune] =
+    raw.trim.toLowerCase match {
+      case "all" => Validated.valid(PruneAll)
+      case other =>
+        other.toIntOption match {
+          case Some(n) if n >= 0 => Validated.valid(PruneKeep(n))
+          case _ =>
+            Validated.invalidNel(
+              s"--prune expects 'all' or a non-negative number, got '$raw'"
+            )
+        }
+    }
+
+  private val pruneOpt: Opts[Option[Prune]] = Opts
+    .option[String](
+      "prune",
+      "Delete previous index versions: 'all', or N to keep the latest N",
+      short = "p"
+    )
+    .mapValidated(parsePrune)
+    .orNone
+
   private final class Abort(message: String) extends RuntimeException(message) {
     override def fillInStackTrace(): Throwable = this
   }
 
   def main: Opts[IO[ExitCode]] = {
-    (urlOpt, mappingsOpt, aliasOpt, workflowOpt, yesOpt).mapN {
-      (url, mappings, alias, workflow, yes) =>
-        fetchExample(url, mappings, alias, workflow, yes)
+    (urlOpt, mappingsOpt, aliasOpt, workflowOpt, yesOpt, pruneOpt).mapN {
+      (url, mappings, alias, workflow, yes, prune) =>
+        execution(url, mappings, alias, workflow, yes, prune)
           .as(ExitCode.Success)
           .recover { case Menu.Interrupted => ExitCode.Success }
           .recoverWith { case e: Abort =>
@@ -79,12 +107,13 @@ object Main
       .toSeq
   }
 
-  private def fetchExample(
+  private def execution(
       urlArg: Option[String],
       mappingsArg: Option[String],
       aliasArg: Option[String],
       workflowArg: Option[String],
-      assumeYes: Boolean
+      assumeYes: Boolean,
+      prune: Option[Prune]
   ): IO[Unit] = {
     for {
       workflow <- workflowArg match {
@@ -168,12 +197,80 @@ object Main
         alias = index.name,
         mapping = fileMapping
       )
-      _ <- IO.println(s"File mapping:\n${fileMapping.noSpacesSortKeys}")
-      _ <- IO.println(
-        s"Index mapping (${index.currentIndexName}):\n${indexMapping.noSpacesSortKeys}"
-      )
+      oldIndices = index.existingIndices.distinct.sorted
+        .map(v => s"${index.name}_v$v")
+        .filterNot(_ == nextIndexName)
+      _ <- cleanup(esUrl, oldIndices, prune, assumeYes)
     } yield ()
   }
+
+  /** Removes previous index versions after a migration, honoring `--prune` and
+    * `--yes`:
+    *   - `--yes` without `--prune`: delete nothing, just report the skip.
+    *   - `--yes` with `--prune`: delete the computed list unattended.
+    *   - no `--yes`, no `--prune`: let the user multiselect which to delete.
+    *   - no `--yes`, with `--prune`: show the computed list and confirm yes/no.
+    */
+  private def cleanup(
+      url: String,
+      oldIndices: Seq[String],
+      prune: Option[Prune],
+      assumeYes: Boolean
+  ): IO[Unit] = {
+    // Old indices sorted newest-first, so PruneKeep(n) keeps the leading n.
+    val byVersionDesc = oldIndices.sortBy(versionSuffix).reverse
+
+    def planned(p: Prune): Seq[String] = p match {
+      case PruneAll     => byVersionDesc
+      case PruneKeep(n) => byVersionDesc.drop(n)
+    }
+
+    def delete(targets: Seq[String]): IO[Unit] =
+      if (targets.isEmpty) IO.println("Nothing to delete.")
+      else
+        targets.traverse_ { i =>
+          Spinner(s"Deleting $i")(Elastic.deleteIndex[IO](url, i))
+        }
+
+    if (oldIndices.isEmpty) IO.println("No previous versions to clean up.")
+    else
+      (assumeYes, prune) match {
+        case (true, None) =>
+          IO.println("Skipping previous version deletion (no --prune given).")
+        case (true, Some(p)) =>
+          delete(planned(p))
+        case (false, None) =>
+          Menu
+            .multiSelect[IO, String](
+              options = byVersionDesc, // newest-first for display
+              title = "Select previous versions to delete (Space to toggle)"
+            )
+            .flatMap(delete)
+        case (false, Some(p)) =>
+          val targets = planned(p)
+          if (targets.isEmpty) IO.println("Nothing to delete.")
+          else
+            for {
+              _ <- IO.println(
+                s"Will delete:\n${targets.map(i => s"  $i").mkString("\n")}"
+              )
+              ok <- Menu.select[IO, Boolean](
+                Seq(true, false),
+                "Delete these indices?",
+                answer => if (answer) "Yes" else "No"
+              )
+              _ <- IO.whenA(ok)(delete(targets))
+            } yield ()
+      }
+  }
+
+  private val VersionSuffixNum = ".*_v(\\d+)$".r
+
+  private def versionSuffix(index: String): Int =
+    index match {
+      case VersionSuffixNum(v) => v.toInt
+      case _                   => Int.MinValue
+    }
 
   private def printPlan(
       url: String,

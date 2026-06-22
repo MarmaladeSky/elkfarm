@@ -108,6 +108,19 @@ object Elastic {
     }
   }
 
+  def deleteIndex[F[_]: Async: Network](
+      url: String,
+      index: String
+  ): F[Json] = {
+    EmberClientBuilder.default[F].build.use { client =>
+      for {
+        base <- Async[F].fromEither(Uri.fromString(url))
+        req = Request[F](Method.DELETE, base / index)
+        resp <- client.expect[Json](req)
+      } yield resp
+    }
+  }
+
   def aliasSwitch[F[_]: Async: Network: Console](
       url: String,
       alias: String,
@@ -182,13 +195,17 @@ object Elastic {
         resp <- client.expect[Json](req)
         status <- Async[F].fromEither(
           decodeTaskStatus(resp)
-            .leftMap(f => new RuntimeException(s"Could not read task $taskId: $f"))
+            .leftMap(f =>
+              new RuntimeException(s"Could not read task $taskId: $f")
+            )
         )
       } yield status
     }
   }
 
-  private def decodeTaskStatus(json: Json): Either[io.circe.DecodingFailure, TaskStatus] = {
+  private def decodeTaskStatus(
+      json: Json
+  ): Either[io.circe.DecodingFailure, TaskStatus] = {
     val root   = json.hcursor
     val status = root.downField("task").downField("status")
     for {

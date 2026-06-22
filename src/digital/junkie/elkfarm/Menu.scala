@@ -35,7 +35,7 @@ object Menu {
     }
 
     if (title.nonEmpty) println(title)
-    system(
+    val _ = system(
       c"stty -echo -icanon -isig min 1 time 0"
     ) // raw-ish: no echo, char-at-a-time
     try {
@@ -54,7 +54,7 @@ object Menu {
             }
           case 'k'     => current = math.max(0, current - 1)
           case 'j'     => current = math.min(n - 1, current + 1)
-          case 10 | 13 => chosen = current // Enter (LF / CR)
+          case 10 | 13 => chosen = current  // Enter (LF / CR)
           case 3       => throw Interrupted // Ctrl-C: abort cleanly
           case _       => ()
         }
@@ -67,16 +67,16 @@ object Menu {
     } finally {
       print("[?25h") // show cursor
       Console.flush()
-      system(c"stty sane") // restore terminal
+      val _ = system(c"stty sane") // restore terminal
     }
   }
 
   /** Interactive search box on the first line with up to `window` result rows
     * below. `candidates(query)` produces the rows for the current query; the
-    * user types to refine it, Down moves focus into the list, Up/Down
-    * navigate, and Enter selects the highlighted row (Enter from the box picks
-    * the top result). Typing or Backspace in the list returns focus to the box.
-    * If `descend(row)` is `Some(path)`, Enter instead replaces the query with
+    * user types to refine it, Down moves focus into the list, Up/Down navigate,
+    * and Enter selects the highlighted row (Enter from the box picks the top
+    * result). Typing or Backspace in the list returns focus to the box. If
+    * `descend(row)` is `Some(path)`, Enter instead replaces the query with
     * `path` and keeps browsing rather than selecting the row. Pressing Tab in
     * the box replaces the query with `complete(firstRow)` when it is defined.
     */
@@ -127,7 +127,7 @@ object Menu {
     }
 
     if (title.nonEmpty) println(title)
-    system(c"stty -echo -icanon -isig min 1 time 0")
+    val _ = system(c"stty -echo -icanon -isig min 1 time 0")
     try {
       print(s"$esc[?25l") // hide cursor; we draw our own caret
       render()
@@ -139,7 +139,8 @@ object Menu {
               getchar() match {
                 case 65 => // up
                   if (!focusInput) {
-                    if (current == 0) focusInput = true // back into the search box
+                    if (current == 0)
+                      focusInput = true // back into the search box
                     else current -= 1
                   }
                 case 66 => // down
@@ -162,7 +163,8 @@ object Menu {
           case 23 => // Ctrl-W: delete the path segment / word before the cursor
             if (query.nonEmpty) {
               var i = query.length
-              while (i > 0 && isSep(query.charAt(i - 1))) i -= 1 // trailing seps
+              while (i > 0 && isSep(query.charAt(i - 1)))
+                i -= 1 // trailing seps
               while (i > 0 && !isSep(query.charAt(i - 1))) i -= 1 // the segment
               query = query.substring(0, i); focusInput = true; current = 0
             }
@@ -185,7 +187,78 @@ object Menu {
     } finally {
       print(s"$esc[?25h") // show cursor
       Console.flush()
-      system(c"stty sane") // restore terminal
+      val _ = system(c"stty sane") // restore terminal
+    }
+  }
+
+  /** Like [[select]], but lets the user toggle any number of options on/off
+    * (Space) before confirming (Enter). Returns the chosen options in their
+    * original order; the result may be empty. An empty `options` list confirms
+    * immediately with an empty selection.
+    */
+  def multiSelect[F[_], A](
+      options: Seq[A],
+      title: String = "",
+      show: A => String = (a: A) => a.toString
+  )(implicit F: Sync[F]): F[Seq[A]] = F.blocking {
+    if (options.isEmpty) Seq.empty[A]
+    else {
+      val esc      = ""
+      val n        = options.size
+      var current  = 0
+      var selected = Set.empty[Int]
+
+      def render(): Unit = {
+        for ((opt, i) <- options.zipWithIndex) {
+          val cursor = if (i == current) ">" else " "
+          val box    = if (selected.contains(i)) "[x]" else "[ ]"
+          print(
+            s"$esc[2K$cursor $box ${show(opt)}\r\n"
+          ) // clear line, then draw
+        }
+        Console.flush()
+      }
+
+      if (title.nonEmpty) println(title)
+      val _ = system(
+        c"stty -echo -icanon -isig min 1 time 0"
+      ) // raw-ish: no echo, char-at-a-time
+      try {
+        print(s"$esc[?25l") // hide cursor
+        render()
+        var done = false
+        while (!done) {
+          getchar() match {
+            case 27 => // ESC: possible arrow-key sequence "ESC [ A/B"
+              if (getchar() == 91) {
+                getchar() match {
+                  case 65 => current = math.max(0, current - 1)     // up
+                  case 66 => current = math.min(n - 1, current + 1) // down
+                  case _  => ()
+                }
+              }
+            case 'k' => current = math.max(0, current - 1)
+            case 'j' => current = math.min(n - 1, current + 1)
+            case 32 => // Space: toggle the highlighted option
+              if (selected.contains(current)) selected -= current
+              else selected += current
+            case 10 | 13 => done = true       // Enter: confirm selection
+            case 3       => throw Interrupted // Ctrl-C: abort cleanly
+            case _       => ()
+          }
+          if (!done) {
+            print(s"$esc[${n}A") // cursor back up to the first option
+            render()
+          }
+        }
+        options.zipWithIndex.collect {
+          case (opt, i) if selected.contains(i) => opt
+        }
+      } finally {
+        print(s"$esc[?25h") // show cursor
+        Console.flush()
+        val _ = system(c"stty sane") // restore terminal
+      }
     }
   }
 
@@ -196,8 +269,8 @@ object Menu {
       options: Seq[A],
       title: String = "",
       show: A => String = (a: A) => a.toString,
-      matches: (String, String) => Boolean =
-        (q, label) => label.toLowerCase.contains(q.toLowerCase)
+      matches: (String, String) => Boolean = (q, label) =>
+        label.toLowerCase.contains(q.toLowerCase)
   )(implicit F: Sync[F]): F[A] = {
     require(options.nonEmpty, "Menu.search requires at least one option")
     runSearch[F, A](
@@ -259,7 +332,7 @@ object Menu {
     Console.flush()
     // Read char-at-a-time (with our own echo) so that Ctrl-C arrives as a byte
     // we can act on immediately rather than as a signal swallowed by the runtime.
-    system(c"stty -echo -icanon -isig min 1 time 0")
+    val _ = system(c"stty -echo -icanon -isig min 1 time 0")
     try {
       val sb   = new StringBuilder
       var done = false
@@ -282,7 +355,7 @@ object Menu {
       val line = sb.toString
       if (line.isEmpty) default else line
     } finally {
-      system(c"stty sane")
+      val _ = system(c"stty sane")
     }
   }
 }
