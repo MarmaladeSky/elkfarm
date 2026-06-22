@@ -27,7 +27,10 @@ class MigrationSuite extends CatsEffectSuite {
     "_" + Random.alphanumeric.filter(_.isLetter).take(5).mkString.toLowerCase
 
   private def loadMapping(name: String): Json = {
-    val src = scala.io.Source.fromFile(s"src/test/resources/mappings/$name")
+    // Mill runs tests in a sandbox working dir and exposes the test resource
+    // folder via MILL_TEST_RESOURCE_DIR; fall back to the on-disk layout.
+    val dir = sys.env.getOrElse("MILL_TEST_RESOURCE_DIR", "test/resources")
+    val src = scala.io.Source.fromFile(s"$dir/mappings/$name")
     try parse(src.mkString).fold(throw _, identity)
     finally src.close()
   }

@@ -1,0 +1,32 @@
+package build
+
+import mill.*, scalalib.*, scalanativelib.*
+import mill.scalanativelib.api.*
+
+object `package` extends ScalaNativeModule {
+  def scalaVersion       = "3.3.4"
+  def scalaNativeVersion = "0.5.7"
+
+  def scalacOptions = Seq("-no-indent")
+
+  def mvnDeps = Seq(
+    mvn"org.http4s::http4s-ember-client::0.23.34",
+    mvn"org.http4s::http4s-circe::0.23.34",
+    mvn"org.typelevel::cats-effect::3.7.0",
+    mvn"io.circe::circe-core::0.14.10",
+    mvn"io.circe::circe-generic::0.14.10",
+    mvn"io.circe::circe-parser::0.14.10",
+    mvn"com.monovore::decline::2.6.2",
+    mvn"com.monovore::decline-effect::2.6.2"
+  )
+
+  def releaseMode = ReleaseMode.ReleaseFast // clang -O2 (NIR optimizer on)
+  def nativeLTO   = LTO.None                // mirrors sbt LTO.none
+
+  object test extends ScalaNativeTests {
+    def testFramework = "munit.Framework"
+    def mvnDeps = Seq(
+      mvn"org.typelevel::munit-cats-effect::2.2.0"
+    )
+  }
+}
