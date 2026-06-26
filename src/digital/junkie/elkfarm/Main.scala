@@ -18,31 +18,31 @@ object Main
       header = "Manage ElasticSearch indices via aliases"
     ) {
 
-  private val urlOpt = Opts
+  val urlOpt = Opts
     .option[String]("url", "ElasticSearch URL", short = "u")
     .orNone
 
-  private val mappingsOpt = Opts
+  val mappingsOpt = Opts
     .option[String]("mappings", "Path to the mappings file", short = "m")
     .orNone
 
-  private val aliasOpt = Opts
+  val aliasOpt = Opts
     .option[String]("alias", "Alias to manage", short = "a")
     .orNone
 
-  private val workflowOpt = Opts
+  val workflowOpt = Opts
     .option[String]("workflow", "Workflow to run", short = "w")
     .orNone
 
-  private val yesOpt: Opts[Boolean] = Opts
+  val yesOpt: Opts[Boolean] = Opts
     .flag("yes", "Skip the confirmation and apply the changes", short = "y")
     .orFalse
 
-  private sealed trait Prune
-  private case object PruneAll               extends Prune
-  private final case class PruneKeep(n: Int) extends Prune
+  sealed trait Prune
+  case object PruneAll               extends Prune
+  final case class PruneKeep(n: Int) extends Prune
 
-  private def parsePrune(raw: String): ValidatedNel[String, Prune] =
+  def parsePrune(raw: String): ValidatedNel[String, Prune] =
     raw.trim.toLowerCase match {
       case "all" => Validated.valid(PruneAll)
       case other =>
@@ -55,7 +55,7 @@ object Main
         }
     }
 
-  private val pruneOpt: Opts[Option[Prune]] = Opts
+  val pruneOpt: Opts[Option[Prune]] = Opts
     .option[String](
       "prune",
       "Delete previous index versions: 'all', or N to keep the latest N",
@@ -64,7 +64,7 @@ object Main
     .mapValidated(parsePrune)
     .orNone
 
-  private final class Abort(message: String) extends RuntimeException(message) {
+  final class Abort(message: String) extends RuntimeException(message) {
     override def fillInStackTrace(): Throwable = this
   }
 
@@ -80,9 +80,9 @@ object Main
     }
   }
 
-  private val VersionSuffix = "_v(\\d+)".r
+  val VersionSuffix = "_v(\\d+)".r
 
-  private def versionOf(aliasName: String, index: String): Option[Int] = {
+  def versionOf(aliasName: String, index: String): Option[Int] = {
     if (index.startsWith(aliasName))
       index.substring(aliasName.length) match {
         case VersionSuffix(v) => Some(v.toInt)
@@ -91,7 +91,7 @@ object Main
     else None
   }
 
-  private def findCandidates(state: State): Seq[ManagedIndex] = {
+  def findCandidates(state: State): Seq[ManagedIndex] = {
 
     state.aliases
       .groupBy(_.alias)
@@ -107,7 +107,37 @@ object Main
       .toSeq
   }
 
-  private def execution(
+  def selectIndex(
+      candidates: Seq[ManagedIndex],
+      aliasArg: Option[String]
+  ): IO[ManagedIndex] = {
+    if (candidates.isEmpty)
+      IO.raiseError(
+        new Abort(
+          "No managed indices found. Expected at least one alias that points " +
+            "to a single index named '<alias>_v<number>'."
+        )
+      )
+    else
+      aliasArg match {
+        case Some(a) =>
+          candidates.find(_.name == a) match {
+            case Some(c) => IO.pure(c)
+            case None =>
+              IO.raiseError(
+                new Abort(s"Alias '$a' not found among managed aliases.")
+              )
+          }
+        case None =>
+          Menu.search[IO, ManagedIndex](
+            candidates,
+            title = "Select an index",
+            show = _.name
+          )
+      }
+  }
+
+  def execution(
       urlArg: Option[String],
       mappingsArg: Option[String],
       aliasArg: Option[String],
@@ -142,22 +172,7 @@ object Main
         Elastic.listIndicesAndAliases[IO](esUrl)
       )
       candidates = findCandidates(state)
-      index <- aliasArg match {
-        case Some(a) =>
-          candidates.find(_.name == a) match {
-            case Some(c) => IO.pure(c)
-            case None =>
-              IO.raiseError(
-                new Abort(s"Alias '$a' not found among managed aliases.")
-              )
-          }
-        case None =>
-          Menu.search[IO, ManagedIndex](
-            candidates,
-            title = "Select an index",
-            show = _.name
-          )
-      }
+      index <- selectIndex(candidates, aliasArg)
       currentIndexName = index.currentIndexName
       newVersion <- Menu.input[IO](
         s"Version for the new index (current $currentIndexName)",
@@ -172,7 +187,7 @@ object Main
             start = "./"
           )
       }
-      fileMapping  <- readJsonFile(mappingsFile)
+      fileMapping <- readJsonFile(mappingsFile)
       _ <- printPlan(
         url = esUrl,
         alias = index.name,
@@ -203,7 +218,7 @@ object Main
     } yield ()
   }
 
-  private def cleanup(
+  def cleanup(
       url: String,
       oldIndices: Seq[String],
       prune: Option[Prune],
@@ -256,14 +271,14 @@ object Main
     }
   }
 
-  private val VersionSuffixNum = ".*_v(\\d+)$".r
+  val VersionSuffixNum = ".*_v(\\d+)$".r
 
-  private def versionSuffix(index: String): Int = index match {
+  def versionSuffix(index: String): Int = index match {
     case VersionSuffixNum(v) => v.toInt
     case _                   => Int.MinValue
   }
 
-  private def printPlan(
+  def printPlan(
       url: String,
       alias: String,
       newIndex: String,
@@ -306,7 +321,7 @@ object Main
     )
   }
 
-  private def handleReindexFailure(
+  def handleReindexFailure(
       url: String,
       dest: String,
       failures: Vector[Json],
@@ -327,7 +342,7 @@ object Main
     } yield ()
   }
 
-  private def renderFailures(
+  def renderFailures(
       dest: String,
       failures: Vector[Json],
       error: Option[Json]
@@ -369,7 +384,7 @@ object Main
       more).mkString("\n")
   }
 
-  private def readJsonFile(file: File): IO[Json] = {
+  def readJsonFile(file: File): IO[Json] = {
     IO.blocking {
       val src = scala.io.Source.fromFile(file)
       try src.mkString
