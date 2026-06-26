@@ -39,7 +39,7 @@ object Main
     .orFalse
 
   private sealed trait Prune
-  private case object PruneAll              extends Prune
+  private case object PruneAll               extends Prune
   private final case class PruneKeep(n: Int) extends Prune
 
   private def parsePrune(raw: String): ValidatedNel[String, Prune] =
@@ -190,13 +190,17 @@ object Main
             answer => if (answer) "Yes" else "No"
           )
       _ <- IO.raiseWhen(!execute) { Menu.Interrupted }
-      _ <- Migration.run(
-        url = esUrl,
-        source = index.currentIndexName,
-        dest = nextIndexName,
-        alias = index.name,
-        mapping = fileMapping
-      )
+      _ <- Migration
+        .run(
+          url = esUrl,
+          source = index.currentIndexName,
+          dest = nextIndexName,
+          alias = index.name,
+          mapping = fileMapping
+        )
+        .recoverWith { case Migration.ReindexFailed(failures, error) =>
+          handleReindexFailure(esUrl, nextIndexName, failures, error, assumeYes)
+        }
       oldIndices = index.existingIndices.distinct.sorted
         .map(v => s"${index.name}_v$v")
         .filterNot(_ == nextIndexName)
@@ -204,13 +208,6 @@ object Main
     } yield ()
   }
 
-  /** Removes previous index versions after a migration, honoring `--prune` and
-    * `--yes`:
-    *   - `--yes` without `--prune`: delete nothing, just report the skip.
-    *   - `--yes` with `--prune`: delete the computed list unattended.
-    *   - no `--yes`, no `--prune`: let the user multiselect which to delete.
-    *   - no `--yes`, with `--prune`: show the computed list and confirm yes/no.
-    */
   private def cleanup(
       url: String,
       oldIndices: Seq[String],
@@ -313,6 +310,69 @@ object Main
           |${call("POST", "/_aliases", aliasBody)}
           |""".stripMargin
     )
+  }
+
+  private def handleReindexFailure(
+      url: String,
+      dest: String,
+      failures: Vector[Json],
+      error: Option[Json],
+      assumeYes: Boolean
+  ): IO[Unit] = {
+    for {
+      _ <- IO.println(renderFailures(dest, failures, error))
+      _ <- IO.whenA(!assumeYes) {
+        for {
+          del <- Menu.yesNo[IO](s"Delete the incomplete index $dest?")
+          _ <- IO.whenA(del) {
+            Spinner(s"Deleting $dest")(Elastic.deleteIndex[IO](url, dest)).void
+          }
+        } yield ()
+      }
+      _ <- IO.raiseError(new Abort("Reindex failed; alias not switched."))
+    } yield ()
+  }
+
+  private def renderFailures(
+      dest: String,
+      failures: Vector[Json],
+      error: Option[Json]
+  ): String = {
+    val Max = 10
+
+    def reasonOf(cursor: io.circe.ACursor): Option[String] =
+      cursor.get[String]("reason").toOption
+
+    val errorLine = error.map { e =>
+      val reason = reasonOf(e.hcursor).getOrElse(e.noSpaces)
+      s"Task error: $reason"
+    }
+
+    val failureLines = failures.take(Max).map { f =>
+      val c     = f.hcursor
+      val id    = c.get[String]("id").toOption.getOrElse("?")
+      val cause = c.downField("cause")
+      val tpe   = cause.get[String]("type").toOption
+      val reason = reasonOf(cause)
+        .orElse(reasonOf(c))
+        .getOrElse(f.noSpaces)
+      val detail = tpe.fold(reason)(t => s"$t: $reason")
+      s"  - id=$id: $detail"
+    }
+
+    val more =
+      if (failures.size > Max) Seq(s"  (+${failures.size - Max} more)")
+      else Seq.empty
+
+    val countLine =
+      if (failures.nonEmpty) Some(s"${failures.size} document failure(s):")
+      else None
+
+    (Seq(s"Reindex into $dest failed. The alias was NOT switched.") ++
+      errorLine.toSeq ++
+      countLine.toSeq ++
+      failureLines ++
+      more).mkString("\n")
   }
 
   private def readJsonFile(file: File): IO[Json] =

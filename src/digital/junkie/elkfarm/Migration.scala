@@ -7,6 +7,15 @@ import scala.concurrent.duration.*
 
 object Migration {
 
+  /** Raised when the reindex finishes with per-document failures or a top-level
+    * task error. Carries the details so the caller can report them; the alias
+    * is never switched in this case.
+    */
+  final case class ReindexFailed(failures: Vector[Json], error: Option[Json])
+      extends RuntimeException("reindex failed") {
+    override def fillInStackTrace(): Throwable = this
+  }
+
   /** Executes a simple migration: create the destination index with the given
     * mapping, reindex documents from the source index, wait for the reindex to
     * finish, then switch the alias from the source to the destination index.
@@ -44,19 +53,23 @@ object Migration {
     IO.ref(0L -> 0L).flatMap { progress =>
       // Poll the task every second, recording the latest doc counts so the
       // spinner can render live progress; the pulse bar keeps animating between
-      // polls while the numbers update.
-      def poll: IO[Unit] =
+      // polls while the numbers update. Returns the final status on completion.
+      def poll: IO[Elastic.TaskStatus] =
         Elastic.taskStatus[IO](url, taskId).flatMap { status =>
           progress.set(status.processed -> status.total) >>
-            IO.whenA(!status.completed)(IO.sleep(1.second) >> poll)
+            (if (status.completed) IO.pure(status)
+             else IO.sleep(1.second) >> poll)
         }
 
       val label = progress.get.map { case (processed, total) =>
         s"reindex (task $taskId): $processed/$total docs processed"
       }
 
-      Spinner.withProgress(label)(poll) >>
-        label.flatMap(l => IO.println(s"$l — done"))
+      Spinner.withProgress(label)(poll).flatMap { status =>
+        if (status.failed)
+          IO.raiseError(ReindexFailed(status.failures, status.error))
+        else label.flatMap(l => IO.println(s"$l — done"))
+      }
     }
   }
 }

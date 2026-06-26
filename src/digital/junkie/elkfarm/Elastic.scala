@@ -48,17 +48,25 @@ object Elastic {
 
   case class State(indices: Seq[json.CatIndex], aliases: Seq[json.CatAlias])
 
-  /** A snapshot of a reindex task: whether it has finished and how many
-    * documents have been processed so far out of the total.
+  /** A snapshot of a reindex task: whether it has finished, how many documents
+    * have been processed so far out of the total, and — once it completes — any
+    * per-document bulk failures or a top-level task error.
     */
   case class TaskStatus(
       completed: Boolean,
       total: Long,
       created: Long,
       updated: Long,
-      deleted: Long
+      deleted: Long,
+      failures: Vector[Json],
+      error: Option[Json]
   ) {
     def processed: Long = created + updated + deleted
+
+    /** True when the reindex finished with bulk failures or errored outright.
+      * Version conflicts are intentionally not treated as failures.
+      */
+    def failed: Boolean = error.isDefined || failures.nonEmpty
   }
 
   def listIndicesAndAliases[F[_]: Async: Network: Console](
@@ -208,12 +216,22 @@ object Elastic {
   ): Either[io.circe.DecodingFailure, TaskStatus] = {
     val root   = json.hcursor
     val status = root.downField("task").downField("status")
+    // failures/error only appear once the task completes; while it is still
+    // running there is no `response` object, so read them leniently (a missing
+    // or failed cursor yields empty/None) and keep them out of the Either chain.
+    val failures =
+      root
+        .downField("response")
+        .get[Vector[Json]]("failures")
+        .toOption
+        .getOrElse(Vector.empty)
+    val error = root.get[Json]("error").toOption
     for {
       completed <- root.get[Boolean]("completed")
       total     <- status.getOrElse[Long]("total")(0L)
       created   <- status.getOrElse[Long]("created")(0L)
       updated   <- status.getOrElse[Long]("updated")(0L)
       deleted   <- status.getOrElse[Long]("deleted")(0L)
-    } yield TaskStatus(completed, total, created, updated, deleted)
+    } yield TaskStatus(completed, total, created, updated, deleted, failures, error)
   }
 }

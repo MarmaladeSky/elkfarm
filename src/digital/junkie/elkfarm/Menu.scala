@@ -14,6 +14,14 @@ object Menu {
     override def fillInStackTrace(): Throwable = this
   }
 
+  def yesNo[F[_]](title: String = "")(implicit F: Sync[F]): F[Boolean] = {
+    select[F, Boolean](
+      Seq(true, false),
+      title,
+      answer => if (answer) "Yes" else "No"
+    )
+  }
+
   def select[F[_], A](
       options: Seq[A],
       title: String = "",
