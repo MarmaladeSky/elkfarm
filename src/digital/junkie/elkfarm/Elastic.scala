@@ -1,7 +1,6 @@
 package digital.junkie.elkfarm
 
 import cats.effect.Async
-import cats.effect.std.Console
 import cats.syntax.all.*
 import fs2.io.net.Network
 import io.circe.{Decoder, Json}
@@ -69,7 +68,7 @@ object Elastic {
     def failed: Boolean = error.isDefined || failures.nonEmpty
   }
 
-  def listIndicesAndAliases[F[_]: Async: Network: Console](
+  def listIndicesAndAliases[F[_]: Async: Network](
       url: String
   ): F[State] = {
     EmberClientBuilder.default[F].build.use { client =>
@@ -89,20 +88,7 @@ object Elastic {
     }
   }
 
-  def getMapping[F[_]: Async: Network: Console](
-      url: String,
-      index: String
-  ): F[Json] = {
-    EmberClientBuilder.default[F].build.use { client =>
-      for {
-        base <- Async[F].fromEither(Uri.fromString(url))
-        req = Request[F](Method.GET, base / index / "_mapping")
-        mapping <- client.expect[Json](req)
-      } yield mapping
-    }
-  }
-
-  def createIndex[F[_]: Async: Network: Console](
+  def createIndex[F[_]: Async: Network](
       url: String,
       index: String,
       body: Json
@@ -129,7 +115,7 @@ object Elastic {
     }
   }
 
-  def aliasSwitch[F[_]: Async: Network: Console](
+  def aliasSwitch[F[_]: Async: Network](
       url: String,
       alias: String,
       oldIndex: String,
@@ -164,7 +150,7 @@ object Elastic {
     * task id immediately (`wait_for_completion=false`), without waiting for it
     * to finish. Poll progress with [[taskStatus]].
     */
-  def reindex[F[_]: Async: Network: Console](
+  def reindex[F[_]: Async: Network](
       url: String,
       source: String,
       dest: String
@@ -192,7 +178,7 @@ object Elastic {
   /** Looks up the current state of a reindex task by id, reporting whether it
     * has completed and how many documents have been processed.
     */
-  def taskStatus[F[_]: Async: Network: Console](
+  def taskStatus[F[_]: Async: Network](
       url: String,
       taskId: String
   ): F[TaskStatus] = {

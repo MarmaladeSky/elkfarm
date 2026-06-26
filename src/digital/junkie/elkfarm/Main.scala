@@ -116,7 +116,7 @@ object Main
       prune: Option[Prune]
   ): IO[Unit] = {
     for {
-      workflow <- workflowArg match {
+      _ <- workflowArg match {
         case Some(w) =>
           Workflow.byName(w) match {
             case Some(m) => IO.pure(m)
@@ -173,7 +173,6 @@ object Main
           )
       }
       fileMapping  <- readJsonFile(mappingsFile)
-      indexMapping <- Elastic.getMapping[IO](esUrl, index.currentIndexName)
       _ <- printPlan(
         url = esUrl,
         alias = index.name,
