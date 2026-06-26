@@ -184,11 +184,7 @@ object Main
       execute <-
         if (assumeYes) IO.pure(true)
         else
-          Menu.select[IO, Boolean](
-            Seq(true, false),
-            "Should execute the plan?",
-            answer => if (answer) "Yes" else "No"
-          )
+          Menu.yesNo[IO]("Should execute the plan?")
       _ <- IO.raiseWhen(!execute) { Menu.Interrupted }
       _ <- Migration
         .run(
@@ -214,7 +210,6 @@ object Main
       prune: Option[Prune],
       assumeYes: Boolean
   ): IO[Unit] = {
-    // Old indices sorted newest-first, so PruneKeep(n) keeps the leading n.
     val byVersionDesc = oldIndices.sortBy(versionSuffix).reverse
 
     def planned(p: Prune): Seq[String] = p match {
@@ -222,15 +217,17 @@ object Main
       case PruneKeep(n) => byVersionDesc.drop(n)
     }
 
-    def delete(targets: Seq[String]): IO[Unit] =
-      if (targets.isEmpty) IO.println("Nothing to delete.")
-      else
-        targets.traverse_ { i =>
-          Spinner(s"Deleting $i")(Elastic.deleteIndex[IO](url, i))
-        }
+    def delete(targets: Seq[String]): IO[Unit] = if (targets.isEmpty) {
+      IO.println("Nothing to delete.")
+    } else {
+      targets.traverse_ { i =>
+        Spinner(s"Deleting $i")(Elastic.deleteIndex[IO](url, i))
+      }
+    }
 
-    if (oldIndices.isEmpty) IO.println("No previous versions to clean up.")
-    else
+    if (oldIndices.isEmpty) {
+      IO.println("No previous versions to clean up.")
+    } else {
       (assumeYes, prune) match {
         case (true, None) =>
           IO.println("Skipping previous version deletion (no --prune given).")
@@ -245,29 +242,27 @@ object Main
             .flatMap(delete)
         case (false, Some(p)) =>
           val targets = planned(p)
-          if (targets.isEmpty) IO.println("Nothing to delete.")
-          else
+          if (targets.isEmpty) {
+            IO.println("Nothing to delete.")
+          } else {
             for {
               _ <- IO.println(
                 s"Will delete:\n${targets.map(i => s"  $i").mkString("\n")}"
               )
-              ok <- Menu.select[IO, Boolean](
-                Seq(true, false),
-                "Delete these indices?",
-                answer => if (answer) "Yes" else "No"
-              )
-              _ <- IO.whenA(ok)(delete(targets))
+              executeDeletion <- Menu.yesNo[IO]("Delete these indices?")
+              _               <- IO.whenA(executeDeletion)(delete(targets))
             } yield ()
+          }
       }
+    }
   }
 
   private val VersionSuffixNum = ".*_v(\\d+)$".r
 
-  private def versionSuffix(index: String): Int =
-    index match {
-      case VersionSuffixNum(v) => v.toInt
-      case _                   => Int.MinValue
-    }
+  private def versionSuffix(index: String): Int = index match {
+    case VersionSuffixNum(v) => v.toInt
+    case _                   => Int.MinValue
+  }
 
   private def printPlan(
       url: String,
@@ -375,11 +370,12 @@ object Main
       more).mkString("\n")
   }
 
-  private def readJsonFile(file: File): IO[Json] =
+  private def readJsonFile(file: File): IO[Json] = {
     IO.blocking {
       val src = scala.io.Source.fromFile(file)
       try src.mkString
       finally src.close()
     }.flatMap(content => IO.fromEither(parse(content)))
+  }
 
 }
