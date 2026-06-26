@@ -13,7 +13,7 @@ package digital.junkie.elkfarm
 import digital.junkie.elkfarm.Elastic.State
 import munit.CatsEffectSuite
 
-/** Unit tests (no ElasticSearch required) for picking the index to migrate. The
+/** Unit tests (no Elasticsearch required) for picking the index to migrate. The
   * key case is the one that used to crash: an interactive run against a cluster
   * with no managed `<alias>_v<n>` indices must abort cleanly rather than throw
   * out of the empty selection menu.

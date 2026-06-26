@@ -21,7 +21,7 @@ import org.http4s.{Method, Request, Uri}
 
 import scala.util.Random
 
-/** End-to-end migration test. Assumes an ElasticSearch instance is reachable at
+/** End-to-end migration test. Assumes an Elasticsearch instance is reachable at
   * http://localhost:9200 with no authentication.
   *
   * NOTE: this test is expected to FAIL for now: the step that invokes the

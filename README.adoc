@@ -1,6 +1,6 @@
 = elkfarm
 
-A tool that simplifies ElasticSearch/OpenSearch index migrations.
+A tool that simplifies Elasticsearch/OpenSearch index migrations.
 It supports a simple alias-to-versioned_index schema.
 
 == Status
@@ -22,13 +22,13 @@ Run with no flags for the interactive menu, or pass options to skip the prompts:
 ----
 Usage: elkfarm [--url <string>] [--mappings <string>] [--alias <string>] [--workflow <string>] [--yes] [--prune <string>]
 
-Manage ElasticSearch indices via aliases
+Manage Elasticsearch indices via aliases
 
 Options and flags:
     --help
         Display this help text.
     --url <string>, -u <string>
-        ElasticSearch URL
+        Elasticsearch URL
     --mappings <string>, -m <string>
         Path to the mappings file
     --alias <string>, -a <string>
@@ -40,3 +40,16 @@ Options and flags:
     --prune <string>, -p <string>
         Delete previous index versions: 'all', or N to keep the latest N
 ----
+
+=== Workflows
+
+==== Simple
+
+This is the classic way of index migration. We start with the alias and versioned index:
+
+`store_products` -> `store_products_v1`
+
+Create a new `store_products_v2` +
+Reindex `store_products_v1` -> `store_products_v2` +
+Update alias to point to `store_products_v2` +
+Optionally delete `store_products_v1`

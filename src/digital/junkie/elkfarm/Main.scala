@@ -26,11 +26,11 @@ import java.io.File
 object Main
     extends CommandIOApp(
       name = "elkfarm",
-      header = "Manage ElasticSearch indices via aliases"
+      header = "Manage Elasticsearch indices via aliases"
     ) {
 
   val urlOpt = Opts
-    .option[String]("url", "ElasticSearch URL", short = "u")
+    .option[String]("url", "Elasticsearch URL", short = "u")
     .orNone
 
   val mappingsOpt = Opts
@@ -177,7 +177,7 @@ object Main
       }
       esUrl <- urlArg match {
         case Some(u) => IO.pure(u)
-        case None    => Menu.input[IO]("Please input ElasticSearch URL")
+        case None    => Menu.input[IO]("Please input Elasticsearch URL")
       }
       state <- Spinner("Fetching indices and aliases")(
         Elastic.listIndicesAndAliases[IO](client, esUrl)
