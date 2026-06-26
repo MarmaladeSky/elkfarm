@@ -1,0 +1,42 @@
+= elkfarm
+
+A tool that simplifies ElasticSearch/OpenSearch index migrations.
+It supports a simple alias-to-versioned_index schema.
+
+== Status
+
+Work In Progress, most boring parts are vibecoded.
+
+== Build
+
+[source,sh]
+----
+nix-shell --run './mill nativeLink'
+----
+
+== Usage
+
+Run with no flags for the interactive menu, or pass options to skip the prompts:
+
+[source,sh]
+----
+Usage: elkfarm [--url <string>] [--mappings <string>] [--alias <string>] [--workflow <string>] [--yes] [--prune <string>]
+
+Manage ElasticSearch indices via aliases
+
+Options and flags:
+    --help
+        Display this help text.
+    --url <string>, -u <string>
+        ElasticSearch URL
+    --mappings <string>, -m <string>
+        Path to the mappings file
+    --alias <string>, -a <string>
+        Alias to manage
+    --workflow <string>, -w <string>
+        Workflow to run
+    --yes, -y
+        Skip the confirmation and apply the changes
+    --prune <string>, -p <string>
+        Delete previous index versions: 'all', or N to keep the latest N
+----
