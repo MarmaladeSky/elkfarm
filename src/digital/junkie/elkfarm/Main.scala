@@ -9,6 +9,7 @@ import com.monovore.decline.effect.CommandIOApp
 import digital.junkie.elkfarm.Elastic.State
 import io.circe.Json
 import io.circe.parser.parse
+import org.http4s.client.Client
 
 import java.io.File
 
@@ -144,7 +145,7 @@ object Main
       workflowArg: Option[String],
       assumeYes: Boolean,
       prune: Option[Prune]
-  ): IO[Unit] = {
+  ): IO[Unit] = Elastic.clientResource[IO].use { client =>
     for {
       _ <- workflowArg match {
         case Some(w) =>
@@ -169,7 +170,7 @@ object Main
         case None    => Menu.input[IO]("Please input ElasticSearch URL")
       }
       state <- Spinner("Fetching indices and aliases")(
-        Elastic.listIndicesAndAliases[IO](esUrl)
+        Elastic.listIndicesAndAliases[IO](client, esUrl)
       )
       candidates = findCandidates(state)
       index <- selectIndex(candidates, aliasArg)
@@ -202,6 +203,7 @@ object Main
       _ <- IO.raiseWhen(!execute) { Menu.Interrupted }
       _ <- Migration
         .run(
+          client = client,
           url = esUrl,
           source = index.currentIndexName,
           dest = nextIndexName,
@@ -209,16 +211,24 @@ object Main
           mapping = fileMapping
         )
         .recoverWith { case Migration.ReindexFailed(failures, error) =>
-          handleReindexFailure(esUrl, nextIndexName, failures, error, assumeYes)
+          handleReindexFailure(
+            client,
+            esUrl,
+            nextIndexName,
+            failures,
+            error,
+            assumeYes
+          )
         }
       oldIndices = index.existingIndices.distinct.sorted
         .map(v => s"${index.name}_v$v")
         .filterNot(_ == nextIndexName)
-      _ <- cleanup(esUrl, oldIndices, prune, assumeYes)
+      _ <- cleanup(client, esUrl, oldIndices, prune, assumeYes)
     } yield ()
   }
 
   def cleanup(
+      client: Client[IO],
       url: String,
       oldIndices: Seq[String],
       prune: Option[Prune],
@@ -235,7 +245,7 @@ object Main
       IO.println("Nothing to delete.")
     } else {
       targets.traverse_ { i =>
-        Spinner(s"Deleting $i")(Elastic.deleteIndex[IO](url, i))
+        Spinner(s"Deleting $i")(Elastic.deleteIndex[IO](client, url, i))
       }
     }
 
@@ -322,6 +332,7 @@ object Main
   }
 
   def handleReindexFailure(
+      client: Client[IO],
       url: String,
       dest: String,
       failures: Vector[Json],
@@ -334,7 +345,9 @@ object Main
         for {
           del <- Menu.yesNo[IO](s"Delete the incomplete index $dest?")
           _ <- IO.whenA(del) {
-            Spinner(s"Deleting $dest")(Elastic.deleteIndex[IO](url, dest)).void
+            Spinner(s"Deleting $dest")(
+              Elastic.deleteIndex[IO](client, url, dest)
+            ).void
           }
         } yield ()
       }

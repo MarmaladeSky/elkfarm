@@ -114,6 +114,7 @@ class MigrationSuite extends CatsEffectSuite {
 
           // Act: run the elkfarm migration into the new index with the new mapping.
           _ <- Migration.run(
+            client = client,
             url = esUrl,
             source = v1,
             dest = v2,
@@ -122,7 +123,7 @@ class MigrationSuite extends CatsEffectSuite {
           )
 
           // Assert: the alias now points at the new index and the docs moved.
-          state <- Elastic.listIndicesAndAliases[IO](esUrl)
+          state <- Elastic.listIndicesAndAliases[IO](client, esUrl)
           target = state.aliases.find(_.alias == alias).map(_.index)
           _ = assertEquals(target, Some(v2), "alias should point at the new index")
           _        <- refresh(v2)

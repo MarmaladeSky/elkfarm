@@ -1,12 +1,13 @@
 package digital.junkie.elkfarm
 
-import cats.effect.Async
+import cats.effect.{Async, Resource}
 import cats.syntax.all.*
 import fs2.io.net.Network
 import io.circe.{Decoder, Json}
 import io.circe.generic.semiauto.deriveDecoder
 import org.http4s.circe.CirceEntityDecoder.*
 import org.http4s.circe.CirceEntityEncoder.*
+import org.http4s.client.Client
 import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.{Method, Request, Uri}
 
@@ -68,54 +69,57 @@ object Elastic {
     def failed: Boolean = error.isDefined || failures.nonEmpty
   }
 
-  def listIndicesAndAliases[F[_]: Async: Network](
-      url: String
-  ): F[State] = {
-    EmberClientBuilder.default[F].build.use { client =>
-      for {
-        base <- Async[F].fromEither(Uri.fromString(url))
-        indicesReq = Request[F](
-          Method.GET,
-          (base / "_cat" / "indices").withQueryParam("format", "json")
-        )
-        indices <- client.expect[List[json.CatIndex]](indicesReq)
-        aliasesReq = Request[F](
-          Method.GET,
-          (base / "_cat" / "aliases").withQueryParam("format", "json")
-        )
-        aliases <- client.expect[List[json.CatAlias]](aliasesReq)
-      } yield State(indices, aliases)
-    }
-  }
+  /** A single shared HTTP client for the lifetime of a run. Acquire it once and
+    * thread it through the Elastic calls rather than building (and tearing down)
+    * a fresh connection pool per request — which matters most for the reindex
+    * poll loop that hits `_tasks` once a second.
+    */
+  def clientResource[F[_]: Async: Network]: Resource[F, Client[F]] =
+    EmberClientBuilder.default[F].build
 
-  def createIndex[F[_]: Async: Network](
+  def listIndicesAndAliases[F[_]: Async](
+      client: Client[F],
+      url: String
+  ): F[State] =
+    for {
+      base <- Async[F].fromEither(Uri.fromString(url))
+      indicesReq = Request[F](
+        Method.GET,
+        (base / "_cat" / "indices").withQueryParam("format", "json")
+      )
+      indices <- client.expect[List[json.CatIndex]](indicesReq)
+      aliasesReq = Request[F](
+        Method.GET,
+        (base / "_cat" / "aliases").withQueryParam("format", "json")
+      )
+      aliases <- client.expect[List[json.CatAlias]](aliasesReq)
+    } yield State(indices, aliases)
+
+  def createIndex[F[_]: Async](
+      client: Client[F],
       url: String,
       index: String,
       body: Json
-  ): F[Json] = {
-    EmberClientBuilder.default[F].build.use { client =>
-      for {
-        base <- Async[F].fromEither(Uri.fromString(url))
-        req = Request[F](Method.PUT, base / index).withEntity(body)
-        resp <- client.expect[Json](req)
-      } yield resp
-    }
-  }
+  ): F[Json] =
+    for {
+      base <- Async[F].fromEither(Uri.fromString(url))
+      req = Request[F](Method.PUT, base / index).withEntity(body)
+      resp <- client.expect[Json](req)
+    } yield resp
 
-  def deleteIndex[F[_]: Async: Network](
+  def deleteIndex[F[_]: Async](
+      client: Client[F],
       url: String,
       index: String
-  ): F[Json] = {
-    EmberClientBuilder.default[F].build.use { client =>
-      for {
-        base <- Async[F].fromEither(Uri.fromString(url))
-        req = Request[F](Method.DELETE, base / index)
-        resp <- client.expect[Json](req)
-      } yield resp
-    }
-  }
+  ): F[Json] =
+    for {
+      base <- Async[F].fromEither(Uri.fromString(url))
+      req = Request[F](Method.DELETE, base / index)
+      resp <- client.expect[Json](req)
+    } yield resp
 
-  def aliasSwitch[F[_]: Async: Network](
+  def aliasSwitch[F[_]: Async](
+      client: Client[F],
       url: String,
       alias: String,
       oldIndex: String,
@@ -137,20 +141,19 @@ object Elastic {
         )
       )
     )
-    EmberClientBuilder.default[F].build.use { client =>
-      for {
-        base <- Async[F].fromEither(Uri.fromString(url))
-        req = Request[F](Method.POST, base / "_aliases").withEntity(body)
-        resp <- client.expect[Json](req)
-      } yield resp
-    }
+    for {
+      base <- Async[F].fromEither(Uri.fromString(url))
+      req = Request[F](Method.POST, base / "_aliases").withEntity(body)
+      resp <- client.expect[Json](req)
+    } yield resp
   }
 
   /** Starts an asynchronous reindex from `source` into `dest` and returns the
     * task id immediately (`wait_for_completion=false`), without waiting for it
     * to finish. Poll progress with [[taskStatus]].
     */
-  def reindex[F[_]: Async: Network](
+  def reindex[F[_]: Async](
+      client: Client[F],
       url: String,
       source: String,
       dest: String
@@ -159,43 +162,39 @@ object Elastic {
       "source" -> Json.obj("index" -> Json.fromString(source)),
       "dest"   -> Json.obj("index" -> Json.fromString(dest))
     )
-    EmberClientBuilder.default[F].build.use { client =>
-      for {
-        base <- Async[F].fromEither(Uri.fromString(url))
-        uri = (base / "_reindex")
-          .withQueryParam("wait_for_completion", "false")
-        req = Request[F](Method.POST, uri).withEntity(body)
-        resp <- client.expect[Json](req)
-        taskId <- Async[F].fromEither(
-          resp.hcursor
-            .get[String]("task")
-            .leftMap(f => new RuntimeException(s"No task id in response: $f"))
-        )
-      } yield taskId
-    }
+    for {
+      base <- Async[F].fromEither(Uri.fromString(url))
+      uri = (base / "_reindex")
+        .withQueryParam("wait_for_completion", "false")
+      req = Request[F](Method.POST, uri).withEntity(body)
+      resp <- client.expect[Json](req)
+      taskId <- Async[F].fromEither(
+        resp.hcursor
+          .get[String]("task")
+          .leftMap(f => new RuntimeException(s"No task id in response: $f"))
+      )
+    } yield taskId
   }
 
   /** Looks up the current state of a reindex task by id, reporting whether it
     * has completed and how many documents have been processed.
     */
-  def taskStatus[F[_]: Async: Network](
+  def taskStatus[F[_]: Async](
+      client: Client[F],
       url: String,
       taskId: String
-  ): F[TaskStatus] = {
-    EmberClientBuilder.default[F].build.use { client =>
-      for {
-        base <- Async[F].fromEither(Uri.fromString(url))
-        req = Request[F](Method.GET, base / "_tasks" / taskId)
-        resp <- client.expect[Json](req)
-        status <- Async[F].fromEither(
-          decodeTaskStatus(resp)
-            .leftMap(f =>
-              new RuntimeException(s"Could not read task $taskId: $f")
-            )
-        )
-      } yield status
-    }
-  }
+  ): F[TaskStatus] =
+    for {
+      base <- Async[F].fromEither(Uri.fromString(url))
+      req = Request[F](Method.GET, base / "_tasks" / taskId)
+      resp <- client.expect[Json](req)
+      status <- Async[F].fromEither(
+        decodeTaskStatus(resp)
+          .leftMap(f =>
+            new RuntimeException(s"Could not read task $taskId: $f")
+          )
+      )
+    } yield status
 
   private def decodeTaskStatus(
       json: Json
