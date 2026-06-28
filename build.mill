@@ -3,6 +3,7 @@
 //| mvnDeps:
 //|   - org.typelevel::scalac-options:0.1.11
 //|   - digital.junkie::mill-explicit-dependencies:$MILL_VERSION
+//|   - com.lihaoyi::mill-contrib-versionfile:$MILL_VERSION
 //| repositories:
 //|   - https://central.sonatype.com/repository/maven-snapshots
 package build
@@ -11,8 +12,13 @@ import mill.*, scalalib.*, scalanativelib.*
 import mill.scalanativelib.api.*
 import org.typelevel.scalacoptions.*
 import digital.junkie.milledependencies.ExplicitDependencies
+import mill.contrib.versionfile.VersionFileModule
 
-object `package` extends ScalaNativeModule, ExplicitDependencies {
+
+object `package` extends ScalaNativeModule, ExplicitDependencies, VersionFileModule {
+
+  def publishVersion = Task { currentVersion().toString }
+
   def scalaVersion       = "3.3.7"
   def scalaNativeVersion = "0.5.12"
 
@@ -55,4 +61,6 @@ object `package` extends ScalaNativeModule, ExplicitDependencies {
       mvn"org.typelevel::munit-cats-effect::2.2.0"
     )
   }
+
 }
+
